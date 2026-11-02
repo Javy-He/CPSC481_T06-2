@@ -5,7 +5,7 @@ import {
   type DragEvent,
 } from 'react'
 
-import { ArrowLeft, ImagePlus, X, Check } from 'lucide-react'
+import { ImagePlus, X, Check } from 'lucide-react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import Layout from '../components/Layout'
@@ -150,24 +150,7 @@ export default function UploadImagesPage() {
   return (
     <Layout>
       <section className="upload-images-page">
-
         <div className="upload-images-container">
-
-          {/* Back navigation */}
-          <button
-            type="button"
-            className="upload-images-back"
-            onClick={handleCancel}
-            disabled={processing}
-          >
-            <ArrowLeft size={18} aria-hidden="true" />
-
-            <span>
-              {isNewCollection
-                ? 'BACK TO ALL COLLECTIONS'
-                : 'BACK TO COLLECTION'}
-            </span>
-          </button>
 
           {/* Page heading */}
           <header className="upload-images-header">
@@ -181,7 +164,6 @@ export default function UploadImagesPage() {
 
           {/* Upload section */}
           <div className="upload-images-content">
-
             <div
               className={`upload-images-dropzone ${
                 dragging ? 'dragging' : ''
@@ -193,9 +175,7 @@ export default function UploadImagesPage() {
               onDragLeave={() => setDragging(false)}
               onDrop={onDrop}
             >
-
               <div className="upload-images-dropzone-content">
-
                 <div className="upload-images-icon">
                   <ImagePlus
                     size={42}
@@ -231,9 +211,7 @@ export default function UploadImagesPage() {
                   hidden
                   onChange={onInputChange}
                 />
-
               </div>
-
             </div>
 
             {/* Upload errors */}
@@ -251,7 +229,6 @@ export default function UploadImagesPage() {
             {/* Selected files */}
             {files.length > 0 && (
               <div className="upload-images-selected">
-
                 <div className="upload-images-selected-header">
                   <h2>Selected Images</h2>
 
@@ -264,9 +241,7 @@ export default function UploadImagesPage() {
                 <ul className="upload-images-file-list">
                   {files.map((file, index) => (
                     <li key={`${file.name}-${index}`}>
-
                       <div className="upload-images-file-info">
-
                         <div className="upload-images-file-icon">
                           <Check
                             size={17}
@@ -284,7 +259,6 @@ export default function UploadImagesPage() {
                             {formatSize(file.size)}
                           </span>
                         </div>
-
                       </div>
 
                       <button
@@ -296,17 +270,14 @@ export default function UploadImagesPage() {
                       >
                         <X size={18} aria-hidden="true" />
                       </button>
-
                     </li>
                   ))}
                 </ul>
-
               </div>
             )}
 
             {/* Actions */}
             <div className="upload-images-actions">
-
               <button
                 type="button"
                 className="upload-images-cancel"
@@ -326,13 +297,9 @@ export default function UploadImagesPage() {
                   ? 'PREPARING IMAGES...'
                   : `FINISH${files.length > 0 ? ` (${files.length})` : ''}`}
               </button>
-
             </div>
-
           </div>
-
         </div>
-
       </section>
     </Layout>
   )
