@@ -2,9 +2,23 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useState,
   type ReactNode,
 } from 'react'
+import {
+  loadLibrary,
+  patchCollection,
+  patchImage,
+  persist,
+  putCollection,
+  putImages,
+  removeCollection,
+  syncImages,
+  type CollectionRecord,
+  type ImageMeta,
+  type ImageRecord,
+} from './db'
 
 export type LibraryImage = {
   id: string
@@ -31,8 +45,17 @@ export type Collection = {
 
 const THUMB_SIZE = 480
 
+type Thumbnail = {
+  src: string
+  thumbSrc: string
+  thumbBlob: Blob | null // the small copy, stored in the database
+  aspectRatio: number
+  width?: number
+  height?: number
+}
+
 // Generate smaller thumbnails so large images don't slow down the UI.
-async function makeThumbnail(file: File) {
+async function makeThumbnail(file: File): Promise<Thumbnail> {
   const fullSrc = URL.createObjectURL(file)
 
   try {
@@ -62,6 +85,7 @@ async function makeThumbnail(file: File) {
     return {
       src: fullSrc,
       thumbSrc: blob ? URL.createObjectURL(blob) : fullSrc,
+      thumbBlob: blob,
       aspectRatio: width / height,
       width,
       height,
@@ -71,6 +95,7 @@ async function makeThumbnail(file: File) {
     return {
       src: fullSrc,
       thumbSrc: fullSrc,
+      thumbBlob: null,
       aspectRatio: 1,
     }
   }
@@ -160,16 +185,17 @@ const SAMPLE_TEXT: Record<string, { title: string; description: string }> = {
 }
 
 // Every 4th photo is for sale; borrowed photos pass sell = false so a photo isn't listed twice
-function makeSamples(collectionId: string, photos: SamplePhoto[], sell = true): LibraryImage[] {
+function makeSamples(collectionId: string, photos: SamplePhoto[], sell = true): ImageRecord[] {
   return photos.map(([path, aspectRatio], i) => {
     const forSale = sell && i % 4 === 0
 
     return {
       id: `${collectionId}-img-${i + 1}`,
+      collectionId,
+      position: i,
       title: SAMPLE_TEXT[path]?.title || path.split('/')[1],
       description: SAMPLE_TEXT[path]?.description ?? '',
-      src: sampleUrls[`../assets/images/${path}.jpg`],
-      thumbSrc: sampleUrls[`../assets/images/${path}_thumb.jpg`],
+      sampleKey: path,
       aspectRatio,
       forSale,
       price: forSale ? 25 + i * 5 : null,
@@ -178,37 +204,26 @@ function makeSamples(collectionId: string, photos: SamplePhoto[], sell = true): 
 }
 
 // ========================================
-// INITIAL COLLECTIONS
+// SAMPLE DATA FOR THE DATABASE
 // ========================================
 
-const initialCollections: Collection[] = [
-  {
-    id: '1',
-    name: 'Spain/Portugal',
-    info: '',
-    isPrivate: false,
-    images: makeSamples('1', COLLECTION_1),
-  },
-  {
-    id: '2',
-    name: 'Alberta',
-    info: '',
-    isPrivate: false,
-    images: makeSamples('2', COLLECTION_2),
-  },
-  {
-    id: '3',
-    name: 'Patagonia',
-    info: '',
-    isPrivate: false,
-    images: makeSamples('3', COLLECTION_3),
-  },
-  {
-    id: '5',
-    name: 'Random',
-    info: '',
-    isPrivate: true,
-    images: makeSamples(
+// Written to the database the first time the app runs. Change this number
+// whenever the sample data above changes, so browsers that saved an older
+// version are reset to the new sample data.
+const SEED_VERSION = 1
+
+const seed = {
+  collections: [
+    { id: '1', name: 'Spain/Portugal', info: '', isPrivate: false, position: 0 },
+    { id: '2', name: 'Alberta', info: '', isPrivate: false, position: 1 },
+    { id: '3', name: 'Patagonia', info: '', isPrivate: false, position: 2 },
+    { id: '5', name: 'Random', info: '', isPrivate: true, position: 3 },
+  ] satisfies CollectionRecord[],
+  images: [
+    ...makeSamples('1', COLLECTION_1),
+    ...makeSamples('2', COLLECTION_2),
+    ...makeSamples('3', COLLECTION_3),
+    ...makeSamples(
       '5',
       [
         COLLECTION_1[2],
@@ -219,8 +234,96 @@ const initialCollections: Collection[] = [
       ],
       false
     ),
-  },
-]
+  ],
+}
+
+// ========================================
+// DATABASE RECORDS <-> APP DATA
+// ========================================
+
+// Turns a stored record into the object the pages use. Uploaded photos
+// get a fresh temporary URL, because those URLs don't survive a refresh.
+function toImage(record: ImageRecord): LibraryImage {
+  const base = {
+    id: record.id,
+    title: record.title,
+    description: record.description,
+    aspectRatio: record.aspectRatio,
+    forSale: record.forSale,
+    price: record.price,
+    format: record.format,
+    width: record.width,
+    height: record.height,
+    fileSize: record.fileSize,
+  }
+
+  if (record.fileBlob) {
+    const src = URL.createObjectURL(record.fileBlob)
+
+    return {
+      ...base,
+      src,
+      thumbSrc: record.thumbBlob ? URL.createObjectURL(record.thumbBlob) : src,
+    }
+  }
+
+  const key = record.sampleKey
+
+  return {
+    ...base,
+    src: key ? sampleUrls[`../assets/images/${key}.jpg`] ?? null : null,
+    thumbSrc: key ? sampleUrls[`../assets/images/${key}_thumb.jpg`] ?? null : null,
+  }
+}
+
+function toCollections(
+  collectionRecords: CollectionRecord[],
+  imageRecords: ImageRecord[]
+): Collection[] {
+  return [...collectionRecords]
+    .sort((a, b) => a.position - b.position)
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      info: c.info,
+      isPrivate: c.isPrivate,
+      images: imageRecords
+        .filter((image) => image.collectionId === c.id)
+        .sort((a, b) => a.position - b.position)
+        .map(toImage),
+    }))
+}
+
+// Only these fields are saved for an image. The photo files themselves
+// (src and thumbSrc) are never overwritten.
+const META_KEYS = [
+  'title',
+  'description',
+  'aspectRatio',
+  'forSale',
+  'price',
+  'format',
+  'width',
+  'height',
+  'fileSize',
+] as const
+
+function pickMeta(source: Partial<LibraryImage>): Partial<ImageMeta> {
+  const picked: Record<string, unknown> = {}
+
+  for (const key of META_KEYS) {
+    if (source[key] !== undefined) picked[key] = source[key]
+  }
+
+  return picked as Partial<ImageMeta>
+}
+
+// Saves in the background. Failures are logged, and the page keeps working.
+function save(task: () => Promise<unknown>) {
+  persist(task).catch((error) =>
+    console.error('Could not save to the database:', error)
+  )
+}
 
 // ========================================
 // LIBRARY CONTEXT
@@ -253,6 +356,9 @@ type LibraryContextValue = {
     imageId: string,
     changes: Partial<Omit<LibraryImage, 'id'>>
   ) => void
+
+  // Erases everything saved in the browser and restores the sample data.
+  resetLibrary: () => Promise<void>
 }
 
 const LibraryContext = createContext<LibraryContextValue | null>(null)
@@ -266,8 +372,35 @@ export function LibraryProvider({
 }: {
   children: ReactNode
 }) {
-  const [collections, setCollections] =
-    useState<Collection[]>(initialCollections)
+  const [collections, setCollections] = useState<Collection[]>([])
+  const [ready, setReady] = useState(false)
+
+  // ========================================
+  // LOAD FROM THE DATABASE
+  // ========================================
+
+  useEffect(() => {
+    let cancelled = false
+
+    loadLibrary(seed, SEED_VERSION)
+      .then(({ collectionRecords, imageRecords }) =>
+        toCollections(collectionRecords, imageRecords)
+      )
+      .catch((error) => {
+        // No database available: use the sample data without saving.
+        console.warn('Database unavailable, data will not be saved:', error)
+        return toCollections(seed.collections, seed.images)
+      })
+      .then((loaded) => {
+        if (cancelled) return
+        setCollections(loaded)
+        setReady(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // ========================================
   // GET COLLECTION
@@ -299,6 +432,18 @@ export function LibraryProvider({
         newCollection,
       ])
 
+      // Using the time as the position keeps new collections after the
+      // sample ones, in the order they were created.
+      save(() =>
+        putCollection({
+          id: newCollection.id,
+          name,
+          info: '',
+          isPrivate,
+          position: Date.now(),
+        })
+      )
+
       // Return the new collection so the page can
       // navigate directly to its upload screen.
       return newCollection
@@ -318,27 +463,45 @@ export function LibraryProvider({
         files.map(makeThumbnail)
       )
 
-      const newImages: LibraryImage[] = files.map(
-        (file, i) => ({
-          id: `${collectionId}-${stamp}-${i}`,
-          title: file.name.replace(/\.[^.]+$/, ''),
-          description: '',
+      const records: ImageRecord[] = files.map((file, i) => ({
+        id: `${collectionId}-${stamp}-${i}`,
+        collectionId,
+        position: stamp + i, // after every earlier photo in the collection
+        title: file.name.replace(/\.[^.]+$/, ''),
+        description: '',
+        aspectRatio: thumbnails[i].aspectRatio,
+        width: thumbnails[i].width,
+        height: thumbnails[i].height,
+        format:
+          file.type.split('/')[1]?.toUpperCase() ||
+          file.name.split('.').pop()?.toUpperCase() ||
+          'Unknown',
+        fileSize: file.size,
+        forSale: false,
+        price: null,
+        fileBlob: file,
+        thumbBlob: thumbnails[i].thumbBlob ?? undefined,
+      }))
 
-          ...thumbnails[i],
+      // Save before showing the photos. If saving fails (for example the
+      // browser's storage is full), the upload page shows its error message
+      // instead of the photos silently disappearing after a refresh.
+      await persist(() => putImages(records))
 
-          format:
-            file.type.split('/')[1]?.toUpperCase() ||
-            file.name.split('.').pop()?.toUpperCase() ||
-            'Unknown',
-
-          width: thumbnails[i].width,
-          height: thumbnails[i].height,
-          fileSize: file.size,
-
-          forSale: false,
-          price: null,
-        })
-      )
+      const newImages: LibraryImage[] = records.map((record, i) => ({
+        id: record.id,
+        title: record.title,
+        description: '',
+        src: thumbnails[i].src,
+        thumbSrc: thumbnails[i].thumbSrc,
+        aspectRatio: record.aspectRatio,
+        width: record.width,
+        height: record.height,
+        format: record.format,
+        fileSize: record.fileSize,
+        forSale: false,
+        price: null,
+      }))
 
       setCollections((prev) =>
         prev.map((c) =>
@@ -373,6 +536,21 @@ export function LibraryProvider({
             : c
         )
       )
+
+      const { name, info, isPrivate, images } = changes
+
+      save(async () => {
+        await patchCollection(collectionId, { name, info, isPrivate })
+
+        // The edit page sends the full photo list, so this also saves
+        // reordering and photos that were removed.
+        if (images) {
+          await syncImages(
+            collectionId,
+            images.map((image) => ({ id: image.id, ...pickMeta(image) }))
+          )
+        }
+      })
     },
     []
   )
@@ -386,6 +564,8 @@ export function LibraryProvider({
       setCollections((prev) =>
         prev.filter((c) => c.id !== collectionId)
       )
+
+      save(() => removeCollection(collectionId))
     },
     []
   )
@@ -414,13 +594,32 @@ export function LibraryProvider({
               }
         )
       )
+
+      save(() => patchImage(imageId, pickMeta(changes)))
     },
     []
   )
 
   // ========================================
+  // RESET LIBRARY
+  // ========================================
+
+  const resetLibrary = useCallback(async () => {
+    try {
+      await persist(() => loadLibrary(seed, SEED_VERSION, true))
+    } catch (error) {
+      console.error('Could not reset the database:', error)
+    }
+
+    setCollections(toCollections(seed.collections, seed.images))
+  }, [])
+
+  // ========================================
   // PROVIDER
   // ========================================
+
+  // Wait for the saved data so pages never flash "not found".
+  if (!ready) return null
 
   return (
     <LibraryContext.Provider
@@ -432,6 +631,7 @@ export function LibraryProvider({
         updateCollection,
         deleteCollection,
         updateImage,
+        resetLibrary,
       }}
     >
       {children}
