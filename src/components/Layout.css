@@ -9,6 +9,11 @@
   background-color: #ffffff;
 }
 
+/* Reserve space for the collapsed sidebar */
+.app-shell-collapsible {
+  padding-left: 65px;
+}
+
 /* ========================================
    SIDEBAR
 ======================================== */
@@ -35,8 +40,8 @@
   overflow: hidden;
 
   transition:
-    width 0.3s ease,
-    padding 0.3s ease;
+    width 0.2s ease,
+    padding 0.2s ease;
 }
 
 /* ========================================
@@ -45,11 +50,18 @@
 
 /* All pages except Home start collapsed */
 .app-shell-collapsible .site-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+
   width: 65px;
+  height: 100vh;
+
   padding: 45px 0 35px;
+  z-index: 1000;
 }
 
-/* Expand when hovered or keyboard-focused */
+/* Expand over the page instead of pushing content */
 .app-shell-collapsible .site-sidebar:hover,
 .app-shell-collapsible .site-sidebar:focus-within {
   width: 290px;
@@ -70,7 +82,9 @@
 
   white-space: nowrap;
 
-  transition: opacity 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    visibility 0.2s ease;
 }
 
 .site-sidebar-brand h2 {
@@ -155,7 +169,10 @@
 /* Navigation labels */
 .site-sidebar-label {
   white-space: nowrap;
-  transition: opacity 0.2s ease;
+
+  transition:
+    opacity 0.2s ease,
+    visibility 0.2s ease;
 }
 
 /* ========================================
@@ -296,6 +313,11 @@
 
 @media (max-width: 480px) {
 
+  /* Reserve space for smaller collapsed sidebar */
+  .app-shell-collapsible {
+    padding-left: 55px;
+  }
+
   .site-sidebar {
     width: 140px;
     padding: 25px 12px 20px;
@@ -343,4 +365,16 @@
     padding-left: 0;
   }
 
+}
+
+/* ========================================
+   REDUCED MOTION ACCESSIBILITY
+======================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  .site-sidebar,
+  .site-sidebar-brand,
+  .site-sidebar-label {
+    transition: none;
+  }
 }
